@@ -45,7 +45,6 @@ import org.apache.hadoop.hdfs.protocol.LastBlockWithStatus;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion;
 import org.apache.hadoop.hdfs.server.blockmanagement.BlockInfo;
 import org.apache.hadoop.hdfs.server.blockmanagement.BlockInfoContiguous;
-import org.apache.hadoop.hdfs.server.blockmanagement.BlockInfoContiguousUnderConstruction;
 import org.apache.hadoop.hdfs.server.common.HdfsServerConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsServerConstants.RollingUpgradeStartupOption;
 import org.apache.hadoop.hdfs.server.common.HdfsServerConstants.StartupOption;
@@ -391,7 +390,7 @@ public class FSEditLogLoader {
             FSNamesystem.LOG.debug("Reopening an already-closed file " +
                 "for append");
           }
-          LocatedBlock lb = fsNamesys.prepareFileForAppend(path, iip,
+          LocatedBlock lb = FSDirAppendOp.prepareFileForAppend(fsNamesys, iip,
               addCloseOp.clientName, addCloseOp.clientMachine, false, false,
               false);
           // add the op into retry cache if necessary
@@ -465,7 +464,7 @@ public class FSEditLogLoader {
       INodesInPath iip = fsDir.getINodesInPath4Write(path);
       INodeFile file = INodeFile.valueOf(iip.getLastINode(), path);
       if (!file.isUnderConstruction()) {
-        LocatedBlock lb = fsNamesys.prepareFileForAppend(path, iip,
+        LocatedBlock lb = FSDirAppendOp.prepareFileForAppend(fsNamesys, iip,
             appendOp.clientName, appendOp.clientMachine, appendOp.newBlock,
             false, false);
         // add the op into retry cache if necessary
@@ -507,7 +506,7 @@ public class FSEditLogLoader {
       }
       INodeFile oldFile = INodeFile.valueOf(fsDir.getINode(path), path);
       // add the new block to the INodeFile
-      addNewBlock(fsDir, addBlockOp, oldFile);
+      addNewBlock(addBlockOp, oldFile);
       break;
     }
     case OP_SET_REPLICATION: {
@@ -515,7 +514,7 @@ public class FSEditLogLoader {
       short replication = fsNamesys.getBlockManager().adjustReplication(
           setReplicationOp.replication);
       FSDirAttrOp.unprotectedSetReplication(fsDir, renameReservedPathsOnUpgrade(
-          setReplicationOp.path, logVersion), replication, null);
+          setReplicationOp.path, logVersion), replication);
       break;
     }
     case OP_CONCAT_DELETE: {
@@ -900,9 +899,9 @@ public class FSEditLogLoader {
     }
     case OP_TRUNCATE: {
       TruncateOp truncateOp = (TruncateOp) op;
-      fsDir.unprotectedTruncate(truncateOp.src, truncateOp.clientName,
-          truncateOp.clientMachine, truncateOp.newLength, truncateOp.timestamp,
-          truncateOp.truncateBlock);
+      FSDirTruncateOp.unprotectedTruncate(fsNamesys, truncateOp.src,
+          truncateOp.clientName, truncateOp.clientMachine,
+          truncateOp.newLength, truncateOp.timestamp, truncateOp.truncateBlock);
       break;
     }
     case OP_SET_STORAGE_POLICY: {
@@ -941,7 +940,7 @@ public class FSEditLogLoader {
   /**
    * Add a new block into the given INodeFile
    */
-  private void addNewBlock(FSDirectory fsDir, AddBlockOp op, INodeFile file)
+  private void addNewBlock(AddBlockOp op, INodeFile file)
       throws IOException {
     BlockInfo[] oldBlocks = file.getBlocks();
     Block pBlock = op.getPenultimateBlock();
@@ -950,7 +949,7 @@ public class FSEditLogLoader {
     if (pBlock != null) { // the penultimate block is not null
       Preconditions.checkState(oldBlocks != null && oldBlocks.length > 0);
       // compare pBlock with the last block of oldBlocks
-      Block oldLastBlock = oldBlocks[oldBlocks.length - 1];
+      BlockInfo oldLastBlock = oldBlocks[oldBlocks.length - 1];
       if (oldLastBlock.getBlockId() != pBlock.getBlockId()
           || oldLastBlock.getGenerationStamp() != pBlock.getGenerationStamp()) {
         throw new IOException(
@@ -960,17 +959,18 @@ public class FSEditLogLoader {
       }
       
       oldLastBlock.setNumBytes(pBlock.getNumBytes());
-      if (oldLastBlock instanceof BlockInfoContiguousUnderConstruction) {
-        fsNamesys.getBlockManager().forceCompleteBlock(file,
-            (BlockInfoContiguousUnderConstruction) oldLastBlock);
+      if (!oldLastBlock.isComplete()) {
+        fsNamesys.getBlockManager().forceCompleteBlock(oldLastBlock);
         fsNamesys.getBlockManager().processQueuedMessagesForBlock(pBlock);
       }
     } else { // the penultimate block is null
       Preconditions.checkState(oldBlocks == null || oldBlocks.length == 0);
     }
     // add the new block
-    BlockInfo newBI = new BlockInfoContiguousUnderConstruction(
-          newBlock, file.getPreferredBlockReplication());
+    BlockInfo newBI = new BlockInfoContiguous(newBlock,
+        file.getPreferredBlockReplication());
+    newBI.convertToBlockUnderConstruction(
+        HdfsServerConstants.BlockUCState.UNDER_CONSTRUCTION, null);
     fsNamesys.getBlockManager().addBlockCollection(newBI, file);
     file.addBlock(newBI);
     fsNamesys.getBlockManager().processQueuedMessagesForBlock(newBlock);
@@ -1010,11 +1010,10 @@ public class FSEditLogLoader {
         oldBlock.getGenerationStamp() != newBlock.getGenerationStamp();
       oldBlock.setGenerationStamp(newBlock.getGenerationStamp());
       
-      if (oldBlock instanceof BlockInfoContiguousUnderConstruction &&
+      if (!oldBlock.isComplete() &&
           (!isLastBlock || op.shouldCompleteLastBlock())) {
         changeMade = true;
-        fsNamesys.getBlockManager().forceCompleteBlock(file,
-            (BlockInfoContiguousUnderConstruction) oldBlock);
+        fsNamesys.getBlockManager().forceCompleteBlock(oldBlock);
       }
       if (changeMade) {
         // The state or gen-stamp of the block has changed. So, we may be
@@ -1049,15 +1048,17 @@ public class FSEditLogLoader {
           // TODO: shouldn't this only be true for the last block?
           // what about an old-version fsync() where fsync isn't called
           // until several blocks in?
-          newBI = new BlockInfoContiguousUnderConstruction(
-              newBlock, file.getPreferredBlockReplication());
+          newBI = new BlockInfoContiguous(newBlock,
+              file.getPreferredBlockReplication());
+          newBI.convertToBlockUnderConstruction(
+              HdfsServerConstants.BlockUCState.UNDER_CONSTRUCTION, null);
         } else {
           // OP_CLOSE should add finalized blocks. This code path
           // is only executed when loading edits written by prior
           // versions of Hadoop. Current versions always log
           // OP_ADD operations as each block is allocated.
           newBI = new BlockInfoContiguous(newBlock,
-              file.getPreferredBlockReplication());
+              file.getFileReplication());
         }
         fsNamesys.getBlockManager().addBlockCollection(newBI, file);
         file.addBlock(newBI);
@@ -1109,59 +1110,40 @@ public class FSEditLogLoader {
   /**
    * Find the last valid transaction ID in the stream.
    * If there are invalid or corrupt transactions in the middle of the stream,
-   * validateEditLog will skip over them.
+   * scanEditLog will skip over them.
    * This reads through the stream but does not close it.
+   *
+   * @param maxTxIdToScan Maximum Tx ID to try to scan.
+   *                      The scan returns after reading this or a higher ID.
+   *                      The file portion beyond this ID is potentially being
+   *                      updated.
    */
-  static EditLogValidation validateEditLog(EditLogInputStream in) {
-    long lastPos = 0;
+  static EditLogValidation scanEditLog(EditLogInputStream in,
+      long maxTxIdToScan) {
+    long lastPos;
     long lastTxId = HdfsServerConstants.INVALID_TXID;
     long numValid = 0;
-    FSEditLogOp op = null;
     while (true) {
+      long txid;
       lastPos = in.getPosition();
       try {
-        if ((op = in.readOp()) == null) {
+        if ((txid = in.scanNextOp()) == HdfsServerConstants.INVALID_TXID) {
           break;
         }
       } catch (Throwable t) {
-        FSImage.LOG.warn("Caught exception after reading " + numValid +
-            " ops from " + in + " while determining its valid length." +
-            "Position was " + lastPos, t);
+        FSImage.LOG.warn("Caught exception after scanning through "
+            + numValid + " ops from " + in
+            + " while determining its valid length. Position was "
+            + lastPos, t);
         in.resync();
         FSImage.LOG.warn("After resync, position is " + in.getPosition());
         continue;
       }
-      if (lastTxId == HdfsServerConstants.INVALID_TXID
-          || op.getTransactionId() > lastTxId) {
-        lastTxId = op.getTransactionId();
+      if (lastTxId == HdfsServerConstants.INVALID_TXID || txid > lastTxId) {
+        lastTxId = txid;
       }
-      numValid++;
-    }
-    return new EditLogValidation(lastPos, lastTxId, false);
-  }
-
-  static EditLogValidation scanEditLog(EditLogInputStream in) {
-    long lastPos = 0;
-    long lastTxId = HdfsServerConstants.INVALID_TXID;
-    long numValid = 0;
-    FSEditLogOp op = null;
-    while (true) {
-      lastPos = in.getPosition();
-      try {
-        if ((op = in.readOp()) == null) { // TODO
-          break;
-        }
-      } catch (Throwable t) {
-        FSImage.LOG.warn("Caught exception after reading " + numValid +
-            " ops from " + in + " while determining its valid length." +
-            "Position was " + lastPos, t);
-        in.resync();
-        FSImage.LOG.warn("After resync, position is " + in.getPosition());
-        continue;
-      }
-      if (lastTxId == HdfsServerConstants.INVALID_TXID
-          || op.getTransactionId() > lastTxId) {
-        lastTxId = op.getTransactionId();
+      if (lastTxId >= maxTxIdToScan) {
+        break;
       }
       numValid++;
     }

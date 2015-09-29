@@ -1204,7 +1204,6 @@ public class NativeAzureFileSystem extends FileSystem {
   }
 
   @Override
-  @SuppressWarnings("deprecation")
   public FSDataOutputStream createNonRecursive(Path f, FsPermission permission,
       boolean overwrite, int bufferSize, short replication, long blockSize,
       Progressable progress) throws IOException {
@@ -1279,7 +1278,6 @@ public class NativeAzureFileSystem extends FileSystem {
   }
 
   @Override
-  @SuppressWarnings("deprecation")
   public FSDataOutputStream createNonRecursive(Path f, FsPermission permission,
       EnumSet<CreateFlag> flags, int bufferSize, short replication, long blockSize,
       Progressable progress) throws IOException {
@@ -1298,7 +1296,6 @@ public class NativeAzureFileSystem extends FileSystem {
   }
 
   @Override
-  @SuppressWarnings("deprecation")
   public FSDataOutputStream createNonRecursive(Path f,
       boolean overwrite, int bufferSize, short replication, long blockSize,
       Progressable progress) throws IOException {
@@ -1360,8 +1357,12 @@ public class NativeAzureFileSystem extends FileSystem {
       String parentKey = pathToKey(parentFolder);
       FileMetadata parentMetadata = store.retrieveMetadata(parentKey);
       if (parentMetadata != null && parentMetadata.isDir() &&
-          parentMetadata.getBlobMaterialization() == BlobMaterialization.Explicit) {
-        store.updateFolderLastModifiedTime(parentKey, parentFolderLease);
+        parentMetadata.getBlobMaterialization() == BlobMaterialization.Explicit) {
+        if (parentFolderLease != null) {
+          store.updateFolderLastModifiedTime(parentKey, parentFolderLease);
+        } else {
+          updateParentFolderLastModifiedTime(key);
+        }
       } else {
         // Make sure that the parent folder exists.
         // Create it using inherited permissions from the first existing directory going up the path
@@ -1500,7 +1501,7 @@ public class NativeAzureFileSystem extends FileSystem {
               createPermissionStatus(FsPermission.getDefault()));
         } else {
           if (!skipParentFolderLastModifidedTimeUpdate) {
-            store.updateFolderLastModifiedTime(parentKey, null);
+            updateParentFolderLastModifiedTime(key);
           }
         }
       }
@@ -1561,9 +1562,8 @@ public class NativeAzureFileSystem extends FileSystem {
       // Update parent directory last modified time
       Path parent = absolutePath.getParent();
       if (parent != null && parent.getParent() != null) { // not root
-        String parentKey = pathToKey(parent);
         if (!skipParentFolderLastModifidedTimeUpdate) {
-          store.updateFolderLastModifiedTime(parentKey, null);
+          updateParentFolderLastModifiedTime(key);
         }
       }
       instrumentation.directoryDeleted();

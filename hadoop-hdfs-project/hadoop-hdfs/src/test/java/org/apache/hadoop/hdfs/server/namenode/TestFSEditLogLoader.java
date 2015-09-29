@@ -35,7 +35,6 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.SortedMap;
 
-import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -48,6 +47,7 @@ import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogLoader.EditLogValidation;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.test.GenericTestUtils;
 import org.apache.hadoop.test.PathUtils;
 import org.apache.log4j.Level;
 import org.junit.Test;
@@ -58,8 +58,8 @@ import com.google.common.io.Files;
 public class TestFSEditLogLoader {
   
   static {
-    ((Log4JLogger)FSImage.LOG).getLogger().setLevel(Level.ALL);
-    ((Log4JLogger)FSEditLogLoader.LOG).getLogger().setLevel(Level.ALL);
+    GenericTestUtils.setLogLevel(FSImage.LOG, Level.ALL);
+    GenericTestUtils.setLogLevel(FSEditLogLoader.LOG, Level.ALL);
   }
   
   private static final File TEST_DIR = PathUtils.getTestDir(TestFSEditLogLoader.class);
@@ -318,7 +318,8 @@ public class TestFSEditLogLoader {
     } finally {
       rwf.close();
     }
-    EditLogValidation validation = EditLogFileInputStream.validateEditLog(logFile);
+    EditLogValidation validation =
+        EditLogFileInputStream.scanEditLog(logFile, Long.MAX_VALUE, true);
     assertTrue(validation.hasCorruptHeader());
   }
 
@@ -333,7 +334,7 @@ public class TestFSEditLogLoader {
     File logFileBak = new File(testDir, logFile.getName() + ".bak");
     Files.copy(logFile, logFileBak);
     EditLogValidation validation =
-        EditLogFileInputStream.validateEditLog(logFile);
+        EditLogFileInputStream.scanEditLog(logFile, Long.MAX_VALUE, true);
     assertTrue(!validation.hasCorruptHeader());
     // We expect that there will be an OP_START_LOG_SEGMENT, followed by
     // NUM_TXNS opcodes, followed by an OP_END_LOG_SEGMENT.
@@ -346,7 +347,8 @@ public class TestFSEditLogLoader {
       // Restore backup, corrupt the txn opcode
       Files.copy(logFileBak, logFile);
       corruptByteInFile(logFile, txOffset);
-      validation = EditLogFileInputStream.validateEditLog(logFile);
+      validation = EditLogFileInputStream.scanEditLog(logFile,
+          Long.MAX_VALUE, true);
       long expectedEndTxId = (txId == (NUM_TXNS + 1)) ?
           NUM_TXNS : (NUM_TXNS + 1);
       assertEquals("Failed when corrupting txn opcode at " + txOffset,
@@ -363,7 +365,8 @@ public class TestFSEditLogLoader {
       // Restore backup, corrupt the txn opcode
       Files.copy(logFileBak, logFile);
       truncateFile(logFile, txOffset);
-      validation = EditLogFileInputStream.validateEditLog(logFile);
+      validation = EditLogFileInputStream.scanEditLog(logFile,
+          Long.MAX_VALUE, true);
       long expectedEndTxId = (txId == 0) ?
           HdfsServerConstants.INVALID_TXID : (txId - 1);
       assertEquals("Failed when corrupting txid " + txId + " txn opcode " +
@@ -381,7 +384,7 @@ public class TestFSEditLogLoader {
     // layout flags section.
     truncateFile(logFile, 8);
     EditLogValidation validation =
-        EditLogFileInputStream.validateEditLog(logFile);
+        EditLogFileInputStream.scanEditLog(logFile, Long.MAX_VALUE, true);
     assertTrue(!validation.hasCorruptHeader());
     assertEquals(HdfsServerConstants.INVALID_TXID, validation.getEndTxId());
   }

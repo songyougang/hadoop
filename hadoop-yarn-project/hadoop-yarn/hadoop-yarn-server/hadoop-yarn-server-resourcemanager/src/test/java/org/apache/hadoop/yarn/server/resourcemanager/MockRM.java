@@ -54,6 +54,7 @@ import org.apache.hadoop.yarn.api.records.FinalApplicationStatus;
 import org.apache.hadoop.yarn.api.records.LogAggregationContext;
 import org.apache.hadoop.yarn.api.records.NodeId;
 import org.apache.hadoop.yarn.api.records.NodeState;
+import org.apache.hadoop.yarn.api.records.Priority;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.exceptions.YarnException;
@@ -155,17 +156,22 @@ public class MockRM extends ResourceManager {
     LOG.info("App State is : " + app.getState());
     if (waitedMsecs >= timeoutMsecs) {
       Assert.fail("App state is not correct (timedout): expected: " +
-          finalState + " actual: " + app.getState());
+          finalState + " actual: " + app.getState() +
+          " for the application " + appId);
     }
   }
-  
-  public void waitForState(ApplicationAttemptId attemptId, 
-                           RMAppAttemptState finalState)
+
+  public void waitForState(ApplicationAttemptId attemptId,
+      RMAppAttemptState finalState)
       throws Exception {
+    waitForState(attemptId, finalState, 40000);
+  }
+
+  public void waitForState(ApplicationAttemptId attemptId,
+      RMAppAttemptState finalState, int timeoutMsecs) throws Exception {
     RMApp app = getRMContext().getRMApps().get(attemptId.getApplicationId());
     Assert.assertNotNull("app shouldn't be null", app);
     RMAppAttempt attempt = app.getRMAppAttempt(attemptId);
-    final int timeoutMsecs = 40000;
     final int minWaitMsecs = 1000;
     final int waitMsPerLoop = 10;
     int loop = 0;
@@ -184,8 +190,22 @@ public class MockRM extends ResourceManager {
     LOG.info("Attempt State is : " + attempt.getAppAttemptState());
     if (waitedMsecs >= timeoutMsecs) {
       Assert.fail("Attempt state is not correct (timedout): expected: "
-          + finalState + " actual: " + attempt.getAppAttemptState());
+          + finalState + " actual: " + attempt.getAppAttemptState()+
+          " for the application attempt " + attemptId);
     }
+  }
+
+  public void waitForContainerState(ContainerId containerId,
+      RMContainerState state) throws Exception {
+    int timeoutSecs = 0;
+    RMContainer container = getResourceScheduler().getRMContainer(containerId);
+    while ((container == null || container.getState() != state)
+        && timeoutSecs++ < 40) {
+      System.out.println(
+          "Waiting for" + containerId + " state to be:" + state.name());
+      Thread.sleep(200);
+    }
+    Assert.assertTrue(container.getState() == state);
   }
 
   public void waitForContainerAllocated(MockNM nm, ContainerId containerId)
@@ -289,6 +309,15 @@ public class MockRM extends ResourceManager {
     return submitApp(masterMemory, false);
   }
 
+  public RMApp submitApp(int masterMemory, Priority priority) throws Exception {
+    Resource resource = Resource.newInstance(masterMemory, 0);
+    return submitApp(resource, "", UserGroupInformation.getCurrentUser()
+        .getShortUserName(), null, false, null,
+        super.getConfig().getInt(YarnConfiguration.RM_AM_MAX_ATTEMPTS,
+            YarnConfiguration.DEFAULT_RM_AM_MAX_ATTEMPTS), null, null, true,
+        false, false, null, 0, null, true, priority);
+  }
+
   public RMApp submitApp(int masterMemory, boolean unmanaged)
       throws Exception {
     return submitApp(masterMemory, "", UserGroupInformation.getCurrentUser()
@@ -327,7 +356,7 @@ public class MockRM extends ResourceManager {
     return submitApp(resource, name, user, acls, false, queue,
         super.getConfig().getInt(YarnConfiguration.RM_AM_MAX_ATTEMPTS,
           YarnConfiguration.DEFAULT_RM_AM_MAX_ATTEMPTS), null, null,
-          true, false, false, null, 0, null, true);
+          true, false, false, null, 0, null, true, null);
   }
 
   public RMApp submitApp(int masterMemory, String name, String user,
@@ -370,18 +399,19 @@ public class MockRM extends ResourceManager {
     resource.setMemory(masterMemory);
     return submitApp(resource, name, user, acls, unmanaged, queue,
         maxAppAttempts, ts, appType, waitForAccepted, keepContainers,
-        false, null, 0, null, true);
+        false, null, 0, null, true, Priority.newInstance(0));
   }
 
   public RMApp submitApp(int masterMemory, long attemptFailuresValidityInterval)
       throws Exception {
     Resource resource = Records.newRecord(Resource.class);
     resource.setMemory(masterMemory);
+    Priority priority = Priority.newInstance(0);
     return submitApp(resource, "", UserGroupInformation.getCurrentUser()
       .getShortUserName(), null, false, null,
       super.getConfig().getInt(YarnConfiguration.RM_AM_MAX_ATTEMPTS,
       YarnConfiguration.DEFAULT_RM_AM_MAX_ATTEMPTS), null, null, true, false,
-      false, null, attemptFailuresValidityInterval, null, true);
+      false, null, attemptFailuresValidityInterval, null, true, priority);
   }
 
   public RMApp submitApp(int masterMemory, String name, String user,
@@ -391,20 +421,22 @@ public class MockRM extends ResourceManager {
       ApplicationId applicationId) throws Exception {
     Resource resource = Records.newRecord(Resource.class);
     resource.setMemory(masterMemory);
+    Priority priority = Priority.newInstance(0);
     return submitApp(resource, name, user, acls, unmanaged, queue,
       maxAppAttempts, ts, appType, waitForAccepted, keepContainers,
-      isAppIdProvided, applicationId, 0, null, true);
+      isAppIdProvided, applicationId, 0, null, true, priority);
   }
 
   public RMApp submitApp(int masterMemory,
       LogAggregationContext logAggregationContext) throws Exception {
     Resource resource = Records.newRecord(Resource.class);
     resource.setMemory(masterMemory);
+    Priority priority = Priority.newInstance(0);
     return submitApp(resource, "", UserGroupInformation.getCurrentUser()
       .getShortUserName(), null, false, null,
       super.getConfig().getInt(YarnConfiguration.RM_AM_MAX_ATTEMPTS,
       YarnConfiguration.DEFAULT_RM_AM_MAX_ATTEMPTS), null, null, true, false,
-      false, null, 0, logAggregationContext, true);
+      false, null, 0, logAggregationContext, true, priority);
    }
 
   public RMApp submitApp(Resource capability, String name, String user,
@@ -412,7 +444,8 @@ public class MockRM extends ResourceManager {
       int maxAppAttempts, Credentials ts, String appType,
       boolean waitForAccepted, boolean keepContainers, boolean isAppIdProvided,
       ApplicationId applicationId, long attemptFailuresValidityInterval,
-      LogAggregationContext logAggregationContext, boolean cancelTokensWhenComplete)
+      LogAggregationContext logAggregationContext,
+      boolean cancelTokensWhenComplete, Priority priority)
       throws Exception {
     ApplicationId appId = isAppIdProvided ? applicationId : null;
     ApplicationClientProtocol client = getClientRMService();
@@ -429,11 +462,14 @@ public class MockRM extends ResourceManager {
     sub.setApplicationId(appId);
     sub.setApplicationName(name);
     sub.setMaxAppAttempts(maxAppAttempts);
-    if(unmanaged) {
+    if (unmanaged) {
       sub.setUnmanagedAM(true);
     }
     if (queue != null) {
       sub.setQueue(queue);
+    }
+    if (priority != null) {
+      sub.setPriority(priority);
     }
     sub.setApplicationType(appType);
     ContainerLaunchContext clc = Records
@@ -733,15 +769,21 @@ public class MockRM extends ResourceManager {
 
   public static MockAM launchAM(RMApp app, MockRM rm, MockNM nm)
       throws Exception {
-    rm.waitForState(app.getApplicationId(), RMAppState.ACCEPTED);
-    RMAppAttempt attempt = app.getCurrentAppAttempt();
-    waitForSchedulerAppAttemptAdded(attempt.getAppAttemptId(), rm);
-    rm.waitForState(attempt.getAppAttemptId(), RMAppAttemptState.SCHEDULED);
+    RMAppAttempt attempt = waitForAttemptScheduled(app, rm);
     System.out.println("Launch AM " + attempt.getAppAttemptId());
     nm.nodeHeartbeat(true);
     MockAM am = rm.sendAMLaunched(attempt.getAppAttemptId());
     rm.waitForState(attempt.getAppAttemptId(), RMAppAttemptState.LAUNCHED);
     return am;
+  }
+
+  public static RMAppAttempt waitForAttemptScheduled(RMApp app, MockRM rm)
+      throws Exception {
+    rm.waitForState(app.getApplicationId(), RMAppState.ACCEPTED);
+    RMAppAttempt attempt = app.getCurrentAppAttempt();
+    waitForSchedulerAppAttemptAdded(attempt.getAppAttemptId(), rm);
+    rm.waitForState(attempt.getAppAttemptId(), RMAppAttemptState.SCHEDULED);
+    return attempt;
   }
 
   public static MockAM launchAndRegisterAM(RMApp app, MockRM rm, MockNM nm)

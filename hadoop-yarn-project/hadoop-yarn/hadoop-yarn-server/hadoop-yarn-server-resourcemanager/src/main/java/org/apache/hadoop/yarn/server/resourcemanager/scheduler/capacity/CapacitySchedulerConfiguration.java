@@ -44,6 +44,7 @@ import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.nodelabels.CommonNodeLabelsManager;
 import org.apache.hadoop.yarn.security.AccessType;
 import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMNodeLabelsManager;
+import org.apache.hadoop.yarn.server.resourcemanager.placement.UserGroupMappingPlacementRule.QueueMapping;
 import org.apache.hadoop.yarn.server.resourcemanager.reservation.ReservationSchedulerConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.SchedulerUtils;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.policy.FairOrderingPolicy;
@@ -207,33 +208,10 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
   public static final String QUEUE_PREEMPTION_DISABLED = "disable_preemption";
 
   @Private
-  public static class QueueMapping {
+  public static final String DEFAULT_APPLICATION_PRIORITY = "default-application-priority";
 
-    public enum MappingType {
-
-      USER("u"),
-      GROUP("g");
-      private final String type;
-      private MappingType(String type) {
-        this.type = type;
-      }
-
-      public String toString() {
-        return type;
-      }
-
-    };
-
-    MappingType type;
-    String source;
-    String queue;
-
-    public QueueMapping(MappingType type, String source, String queue) {
-      this.type = type;
-      this.source = source;
-      this.queue = queue;
-    }
-  }
+  @Private
+  public static final Integer DEFAULT_CONFIGURATION_APPLICATION_PRIORITY = 0;
   
   @Private
   public static final String AVERAGE_CAPACITY = "average-capacity";
@@ -741,7 +719,7 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
    */
   public List<QueueMapping> getQueueMappings() {
     List<QueueMapping> mappings =
-        new ArrayList<CapacitySchedulerConfiguration.QueueMapping>();
+        new ArrayList<QueueMapping>();
     Collection<String> mappingsString =
         getTrimmedStringCollection(QUEUE_MAPPING);
     for (String mappingValue : mappingsString) {
@@ -946,5 +924,12 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
     configuredNodeLabels.add(RMNodeLabelsManager.NO_LABEL);
     
     return configuredNodeLabels;
+  }
+
+  public Integer getDefaultApplicationPriorityConfPerQueue(String queue) {
+    Integer defaultPriority = getInt(getQueuePrefix(queue)
+        + DEFAULT_APPLICATION_PRIORITY,
+        DEFAULT_CONFIGURATION_APPLICATION_PRIORITY);
+    return defaultPriority;
   }
 }

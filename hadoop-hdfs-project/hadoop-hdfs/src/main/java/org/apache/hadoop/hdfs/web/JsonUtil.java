@@ -169,6 +169,9 @@ public class JsonUtil {
     m.put("xceiverCount", datanodeinfo.getXceiverCount());
     m.put("networkLocation", datanodeinfo.getNetworkLocation());
     m.put("adminState", datanodeinfo.getAdminState().name());
+    if (datanodeinfo.getUpgradeDomain() != null) {
+      m.put("upgradeDomain", datanodeinfo.getUpgradeDomain());
+    }
     return m;
   }
 
@@ -312,8 +315,8 @@ public class JsonUtil {
     }
  
     final Map<String, Object> m = new TreeMap<String, Object>();
-    m.put("name", XAttrHelper.getPrefixName(xAttr));
-    m.put("value", xAttr.getValue() != null ? 
+    m.put("name", XAttrHelper.getPrefixedName(xAttr));
+    m.put("value", xAttr.getValue() != null ?
         XAttrCodec.encodeValue(xAttr.getValue(), encoding) : null);
     return m;
   }
@@ -345,7 +348,7 @@ public class JsonUtil {
     throws IOException {
     final List<String> names = Lists.newArrayListWithCapacity(xAttrs.size());
     for (XAttr xAttr : xAttrs) {
-      names.add(XAttrHelper.getPrefixName(xAttr));
+      names.add(XAttrHelper.getPrefixedName(xAttr));
     }
     ObjectMapper mapper = new ObjectMapper();
     String ret = mapper.writeValueAsString(names);

@@ -195,6 +195,10 @@ message ApplicationReportProto {
   optional hadoop.common.TokenProto am_rm_token = 19;
   repeated string applicationTags = 20;
   optional LogAggregationStatusProto log_aggregation_status = 21;
+  optional bool unmanaged_application = 22 [default = false];
+  optional PriorityProto priority = 23;
+  optional string appNodeLabelExpression = 24;
+  optional string amNodeLabelExpression = 25;
 }
 
 enum LogAggregationStatusProto {
@@ -262,6 +266,11 @@ message LabelsToNodeIdsProto {
 message NodeLabelProto {
   optional string name = 1;
   optional bool isExclusive = 2 [default = true]; 
+}
+
+enum ContainerTypeProto {
+  APPLICATION_MASTER = 1;
+  TASK = 2;
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -336,6 +345,8 @@ message LogAggregationContextProto {
  optional string exclude_pattern = 2 [default = ""];
  optional string rolled_logs_include_pattern = 3 [default = ""];
  optional string rolled_logs_exclude_pattern = 4 [default = ".*"];
+ optional string log_aggregation_policy_class_name = 5;
+ optional string log_aggregation_policy_parameters = 6;
 }
 
 enum ApplicationAccessTypeProto {
@@ -378,6 +389,9 @@ message QueueStatisticsProto {
   optional int64 allocatedVCores = 13;
   optional int64 pendingVCores = 14;
   optional int64 reservedVCores = 15;
+  optional int64 allocatedContainers = 16;
+  optional int64 pendingContainers = 17;
+  optional int64 reservedContainers = 18;
 }
 
 message QueueInfoProto {
@@ -456,6 +470,7 @@ message ContainerStatusProto {
   optional ContainerStateProto state = 2;
   optional string diagnostics = 3 [default = "N/A"];
   optional int32 exit_status = 4 [default = -1000];
+  optional ResourceProto capability = 5;
 }
 
 enum ContainerExitStatusProto {
@@ -465,21 +480,10 @@ enum ContainerExitStatusProto {
   DISKS_FAILED = -101;
 }
 
-message ContainerResourceIncreaseRequestProto {
+message ContainerResourceChangeRequestProto {
   optional ContainerIdProto container_id = 1;
   optional ResourceProto capability = 2;
 } 
-
-message ContainerResourceIncreaseProto {
-  optional ContainerIdProto container_id = 1;
-  optional ResourceProto capability = 2;
-  optional hadoop.common.TokenProto container_token = 3;
-}
-
-message ContainerResourceDecreaseProto {
-  optional ContainerIdProto container_id = 1;
-  optional ResourceProto capability = 2;
-}
 
 ////////////////////////////////////////////////////////////////////////
 ////// From common//////////////////////////////////////////////////////

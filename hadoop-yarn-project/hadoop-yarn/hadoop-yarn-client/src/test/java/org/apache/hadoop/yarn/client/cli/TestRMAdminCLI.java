@@ -27,6 +27,7 @@ import static org.mockito.Matchers.argThat;
 import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -52,6 +53,7 @@ import org.apache.hadoop.yarn.server.api.protocolrecords.AddToClusterNodeLabelsR
 import org.apache.hadoop.yarn.server.api.protocolrecords.CheckForDecommissioningNodesRequest;
 import org.apache.hadoop.yarn.server.api.protocolrecords.CheckForDecommissioningNodesResponse;
 import org.apache.hadoop.yarn.server.api.protocolrecords.RefreshAdminAclsRequest;
+import org.apache.hadoop.yarn.server.api.protocolrecords.RefreshClusterMaxPriorityRequest;
 import org.apache.hadoop.yarn.server.api.protocolrecords.RefreshNodesRequest;
 import org.apache.hadoop.yarn.server.api.protocolrecords.RefreshQueuesRequest;
 import org.apache.hadoop.yarn.server.api.protocolrecords.RefreshServiceAclsRequest;
@@ -116,6 +118,7 @@ public class TestRMAdminCLI {
 
     YarnConfiguration conf = new YarnConfiguration();
     conf.setBoolean(YarnConfiguration.RM_HA_ENABLED, true);
+    conf.set(YarnConfiguration.RM_HA_IDS, "rm1,rm2");
     rmAdminCLIWithHAEnabled = new RMAdminCLI(conf) {
 
       @Override
@@ -168,6 +171,14 @@ public class TestRMAdminCLI {
     verify(admin).refreshAdminAcls(any(RefreshAdminAclsRequest.class));
   }
 
+  @Test(timeout = 5000)
+  public void testRefreshClusterMaxPriority() throws Exception {
+    String[] args = { "-refreshClusterMaxPriority" };
+    assertEquals(0, rmAdminCLI.run(args));
+    verify(admin).refreshClusterMaxPriority(
+        any(RefreshClusterMaxPriorityRequest.class));
+  }
+
   @Test(timeout=500)
   public void testRefreshServiceAcl() throws Exception {
     String[] args = { "-refreshServiceAcl" };
@@ -193,7 +204,6 @@ public class TestRMAdminCLI {
     when(admin.checkForDecommissioningNodes(any(
         CheckForDecommissioningNodesRequest.class))).thenReturn(response);
     assertEquals(0, rmAdminCLI.run(args));
-//    verify(admin).refreshNodes(any(RefreshNodesRequest.class));
     verify(admin).refreshNodes(
         RefreshNodesRequest.newInstance(DecommissionType.GRACEFUL));
 
@@ -259,6 +269,8 @@ public class TestRMAdminCLI {
     assertEquals(0, rmAdminCLIWithHAEnabled.run(args));
     verify(haadmin).transitionToActive(
         any(HAServiceProtocol.StateChangeRequestInfo.class));
+    // HAAdmin#isOtherTargetNodeActive should check state of non-target node.
+    verify(haadmin, times(1)).getServiceStatus();
   }
 
   @Test(timeout = 500)
@@ -330,12 +342,17 @@ public class TestRMAdminCLI {
       assertTrue(dataOut
           .toString()
           .contains(
-              "yarn rmadmin [-refreshQueues] [-refreshNodes [-g [timeout in seconds]]] [-refreshSuper" +
-              "UserGroupsConfiguration] [-refreshUserToGroupsMappings] " +
-              "[-refreshAdminAcls] [-refreshServiceAcl] [-getGroup" +
-              " [username]] [-addToClusterNodeLabels <\"label1(exclusive=true),label2(exclusive=false),label3\">]" +
-              " [-removeFromClusterNodeLabels <label1,label2,label3>] [-replaceLabelsOnNode " +
-              "<\"node1[:port]=label1,label2 node2[:port]=label1\">] [-directlyAccessNodeLabelStore]] " +
+              "yarn rmadmin [-refreshQueues] [-refreshNodes [-g [timeout in " +
+              "seconds]]] [-refreshNodesResources] [-refreshSuperUserGroups" +
+              "Configuration] [-refreshUserToGroupsMappings] " +
+              "[-refreshAdminAcls] [-refreshServiceAcl] [-getGroup " +
+              "[username]] [-addToClusterNodeLabels " +
+              "<\"label1(exclusive=true),label2(exclusive=false),label3\">] " +
+              "[-removeFromClusterNodeLabels <label1,label2,label3>] " +
+              "[-replaceLabelsOnNode " +
+              "<\"node1[:port]=label1,label2 node2[:port]=label1\">] " +
+              "[-directlyAccessNodeLabelStore]] [-updateNodeResource " +
+              "[NodeID] [MemSize] [vCores] ([OvercommitTimeout]) " +
               "[-help [cmd]]"));
       assertTrue(dataOut
           .toString()
@@ -346,6 +363,11 @@ public class TestRMAdminCLI {
           .toString()
           .contains(
               "-refreshNodes [-g [timeout in seconds]]: Refresh the hosts information at the " +
+              "ResourceManager."));
+      assertTrue(dataOut
+          .toString()
+          .contains(
+              "-refreshNodesResources: Refresh resources of NodeManagers at the " +
               "ResourceManager."));
       assertTrue(dataOut.toString().contains(
           "-refreshUserToGroupsMappings: Refresh user-to-groups mappings"));
@@ -374,6 +396,8 @@ public class TestRMAdminCLI {
           "Usage: yarn rmadmin [-refreshQueues]", dataErr, 0);
       testError(new String[] { "-help", "-refreshNodes" },
           "Usage: yarn rmadmin [-refreshNodes [-g [timeout in seconds]]]", dataErr, 0);
+      testError(new String[] { "-help", "-refreshNodesResources" },
+          "Usage: yarn rmadmin [-refreshNodesResources]", dataErr, 0);
       testError(new String[] { "-help", "-refreshUserToGroupsMappings" },
           "Usage: yarn rmadmin [-refreshUserToGroupsMappings]", dataErr, 0);
       testError(
@@ -410,13 +434,15 @@ public class TestRMAdminCLI {
       assertEquals(0, rmAdminCLIWithHAEnabled.run(args));
       oldOutPrintStream.println(dataOut);
       String expectedHelpMsg = 
-          "yarn rmadmin [-refreshQueues] [-refreshNodes [-g [timeout in seconds]]] [-refreshSuper"
-              + "UserGroupsConfiguration] [-refreshUserToGroupsMappings] "
+          "yarn rmadmin [-refreshQueues] [-refreshNodes [-g [timeout in seconds]]] "
+              + "[-refreshNodesResources] [-refreshSuperUserGroupsConfiguration] "
+              + "[-refreshUserToGroupsMappings] "
               + "[-refreshAdminAcls] [-refreshServiceAcl] [-getGroup"
               + " [username]] [-addToClusterNodeLabels <\"label1(exclusive=true),"
                   + "label2(exclusive=false),label3\">]"
               + " [-removeFromClusterNodeLabels <label1,label2,label3>] [-replaceLabelsOnNode "
               + "<\"node1[:port]=label1,label2 node2[:port]=label1\">] [-directlyAccessNodeLabelStore]] "
+              + "[-updateNodeResource [NodeID] [MemSize] [vCores] ([OvercommitTimeout]) "
               + "[-transitionToActive [--forceactive] <serviceId>] "
               + "[-transitionToStandby <serviceId>] "
               + "[-getServiceState <serviceId>] [-checkHealth <serviceId>] [-help [cmd]]";

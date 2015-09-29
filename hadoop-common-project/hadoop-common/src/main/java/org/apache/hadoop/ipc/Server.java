@@ -117,10 +117,9 @@ import org.apache.hadoop.util.ProtoUtil;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.Time;
-import org.apache.htrace.Span;
-import org.apache.htrace.Trace;
-import org.apache.htrace.TraceInfo;
-import org.apache.htrace.TraceScope;
+import org.apache.htrace.core.SpanId;
+import org.apache.htrace.core.TraceScope;
+import org.apache.htrace.core.Tracer;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.protobuf.ByteString;
@@ -141,6 +140,7 @@ public abstract class Server {
   private List<AuthMethod> enabledAuthMethods;
   private RpcSaslProto negotiateResponse;
   private ExceptionsHandler exceptionsHandler = new ExceptionsHandler();
+  private Tracer tracer;
   
   public void addTerseExceptions(Class<?>... exceptionClass) {
     exceptionsHandler.addTerseExceptions(exceptionClass);
@@ -387,6 +387,62 @@ public abstract class Server {
   private Responder responder = null;
   private Handler[] handlers = null;
 
+  private boolean logSlowRPC = false;
+
+  /**
+   * Checks if LogSlowRPC is set true.
+   * @return
+   */
+  protected boolean isLogSlowRPC() {
+    return logSlowRPC;
+  }
+
+  /**
+   * Sets slow RPC flag.
+   * @param logSlowRPCFlag
+   */
+  @VisibleForTesting
+  protected void setLogSlowRPC(boolean logSlowRPCFlag) {
+    this.logSlowRPC = logSlowRPCFlag;
+  }
+
+
+  /**
+   * Logs a Slow RPC Request.
+   *
+   * @param methodName - RPC Request method name
+   * @param processingTime - Processing Time.
+   *
+   * if this request took too much time relative to other requests
+   * we consider that as a slow RPC. 3 is a magic number that comes
+   * from 3 sigma deviation. A very simple explanation can be found
+   * by searching for 68–95–99.7 rule. We flag an RPC as slow RPC
+   * if and only if it falls above 99.7% of requests. We start this logic
+   * only once we have enough sample size.
+   */
+  void logSlowRpcCalls(String methodName, int processingTime) {
+    final int deviation = 3;
+
+    // 1024 for minSampleSize just a guess -- not a number computed based on
+    // sample size analysis. It is chosen with the hope that this
+    // number is high enough to avoid spurious logging, yet useful
+    // in practice.
+    final int minSampleSize = 1024;
+    final double threeSigma = rpcMetrics.getProcessingMean() +
+        (rpcMetrics.getProcessingStdDev() * deviation);
+
+    if ((rpcMetrics.getProcessingSampleCount() > minSampleSize) &&
+        (processingTime > threeSigma)) {
+      if(LOG.isWarnEnabled()) {
+        String client = CurCall.get().connection.toString();
+        LOG.warn(
+            "Slow RPC : " + methodName + " took " + processingTime +
+                " milliseconds to process from client " + client);
+      }
+      rpcMetrics.incrSlowRpc();
+    }
+  }
+
   /**
    * A convenience method to bind to a given address and report 
    * better exceptions if the address is not a valid host.
@@ -525,7 +581,7 @@ public abstract class Server {
     private ByteBuffer rpcResponse;       // the response for this call
     private final RPC.RpcKind rpcKind;
     private final byte[] clientId;
-    private final Span traceSpan; // the tracing span on the server side
+    private final TraceScope traceScope; // the HTrace scope on the server side
 
     public Call(int id, int retryCount, Writable param, 
         Connection connection) {
@@ -539,7 +595,7 @@ public abstract class Server {
     }
 
     public Call(int id, int retryCount, Writable param, Connection connection,
-        RPC.RpcKind kind, byte[] clientId, Span span) {
+        RPC.RpcKind kind, byte[] clientId, TraceScope traceScope) {
       this.callId = id;
       this.retryCount = retryCount;
       this.rpcRequest = param;
@@ -548,7 +604,7 @@ public abstract class Server {
       this.rpcResponse = null;
       this.rpcKind = kind;
       this.clientId = clientId;
-      this.traceSpan = span;
+      this.traceScope = traceScope;
     }
     
     @Override
@@ -1958,17 +2014,24 @@ public abstract class Server {
             RpcErrorCodeProto.FATAL_DESERIALIZING_REQUEST, err);
       }
         
-      Span traceSpan = null;
+      TraceScope traceScope = null;
       if (header.hasTraceInfo()) {
-        // If the incoming RPC included tracing info, always continue the trace
-        TraceInfo parentSpan = new TraceInfo(header.getTraceInfo().getTraceId(),
-                                             header.getTraceInfo().getParentId());
-        traceSpan = Trace.startSpan(rpcRequest.toString(), parentSpan).detach();
+        if (tracer != null) {
+          // If the incoming RPC included tracing info, always continue the
+          // trace
+          SpanId parentSpanId = new SpanId(
+              header.getTraceInfo().getTraceId(),
+              header.getTraceInfo().getParentId());
+          traceScope = tracer.newScope(
+              RpcClientUtil.toTraceName(rpcRequest.toString()),
+              parentSpanId);
+          traceScope.detach();
+        }
       }
 
       Call call = new Call(header.getCallId(), header.getRetryCount(),
           rpcRequest, this, ProtoUtil.convert(header.getRpcKind()),
-          header.getClientId().toByteArray(), traceSpan);
+          header.getClientId().toByteArray(), traceScope);
 
       if (callQueue.isClientBackoffEnabled()) {
         // if RPC queue is full, we will ask the RPC client to back off by
@@ -2151,8 +2214,9 @@ public abstract class Server {
           Writable value = null;
 
           CurCall.set(call);
-          if (call.traceSpan != null) {
-            traceScope = Trace.continueSpan(call.traceSpan);
+          if (call.traceScope != null) {
+            call.traceScope.reattach();
+            traceScope = call.traceScope;
             traceScope.getSpan().addTimelineAnnotation("called");
           }
 
@@ -2229,21 +2293,18 @@ public abstract class Server {
         } catch (InterruptedException e) {
           if (running) {                          // unexpected -- log it
             LOG.info(Thread.currentThread().getName() + " unexpectedly interrupted", e);
-            if (Trace.isTracing()) {
+            if (traceScope != null) {
               traceScope.getSpan().addTimelineAnnotation("unexpectedly interrupted: " +
                   StringUtils.stringifyException(e));
             }
           }
         } catch (Exception e) {
           LOG.info(Thread.currentThread().getName() + " caught an exception", e);
-          if (Trace.isTracing()) {
+          if (traceScope != null) {
             traceScope.getSpan().addTimelineAnnotation("Exception: " +
                 StringUtils.stringifyException(e));
           }
         } finally {
-          if (traceScope != null) {
-            traceScope.close();
-          }
           IOUtils.cleanup(LOG, traceScope);
         }
       }
@@ -2343,6 +2404,10 @@ public abstract class Server {
     this.tcpNoDelay = conf.getBoolean(
         CommonConfigurationKeysPublic.IPC_SERVER_TCPNODELAY_KEY,
         CommonConfigurationKeysPublic.IPC_SERVER_TCPNODELAY_DEFAULT);
+
+    this.setLogSlowRPC(conf.getBoolean(
+        CommonConfigurationKeysPublic.IPC_SERVER_LOG_SLOW_RPC,
+        CommonConfigurationKeysPublic.IPC_SERVER_LOG_SLOW_RPC_DEFAULT));
 
     // Create the responder here
     responder = new Responder();
@@ -2552,6 +2617,10 @@ public abstract class Server {
   
   /** Sets the socket buffer size used for responding to RPCs */
   public void setSocketSendBufSize(int size) { this.socketSendBufferSize = size; }
+
+  public void setTracer(Tracer t) {
+    this.tracer = t;
+  }
 
   /** Starts the service.  Must be called before any calls will be handled. */
   public synchronized void start() {

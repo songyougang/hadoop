@@ -54,6 +54,7 @@ import org.apache.hadoop.yarn.api.records.ContainerState;
 import org.apache.hadoop.yarn.api.records.FinalApplicationStatus;
 import org.apache.hadoop.yarn.api.records.LogAggregationStatus;
 import org.apache.hadoop.yarn.api.records.NodeId;
+import org.apache.hadoop.yarn.api.records.NodeLabel;
 import org.apache.hadoop.yarn.api.records.NodeReport;
 import org.apache.hadoop.yarn.api.records.NodeState;
 import org.apache.hadoop.yarn.api.records.Priority;
@@ -104,8 +105,9 @@ public class TestYarnCLI {
           "user", "queue", "appname", "host", 124, null,
           YarnApplicationState.FINISHED, "diagnostics", "url", 0, 0,
           FinalApplicationStatus.SUCCEEDED, usageReport, "N/A", 0.53789f, "YARN",
-          null);
+          null, null, false, Priority.newInstance(0), "high-mem", "high-mem");
       newApplicationReport.setLogAggregationStatus(LogAggregationStatus.SUCCEEDED);
+      newApplicationReport.setPriority(Priority.newInstance(0));
       when(client.getApplicationReport(any(ApplicationId.class))).thenReturn(
           newApplicationReport);
       int result = cli.run(new String[] { "application", "-status", applicationId.toString() });
@@ -119,6 +121,7 @@ public class TestYarnCLI {
       pw.println("\tApplication-Type : YARN");
       pw.println("\tUser : user");
       pw.println("\tQueue : queue");
+      pw.println("\tApplication Priority : 0");
       pw.println("\tStart-Time : 0");
       pw.println("\tFinish-Time : 0");
       pw.println("\tProgress : 53.79%");
@@ -131,6 +134,9 @@ public class TestYarnCLI {
           (i == 0 ? "N/A" : "123456 MB-seconds, 4567 vcore-seconds"));
       pw.println("\tLog Aggregation Status : SUCCEEDED");
       pw.println("\tDiagnostics : diagnostics");
+      pw.println("\tUnmanaged Application : false");
+      pw.println("\tApplication Node Label Expression : high-mem");
+      pw.println("\tAM container Node Label Expression : high-mem");
       pw.close();
       String appReportStr = baos.toString("UTF-8");
       Assert.assertEquals(appReportStr, sysOutStream.toString());
@@ -1308,7 +1314,8 @@ public class TestYarnCLI {
     pw.println("\tCapacity : " + "40.0%");
     pw.println("\tCurrent Capacity : " + "50.0%");
     pw.println("\tMaximum Capacity : " + "80.0%");
-    pw.println("\tDefault Node Label expression : ");
+    pw.println("\tDefault Node Label expression : "
+        + NodeLabel.DEFAULT_NODE_LABEL_PARTITION);
     pw.println("\tAccessible Node Labels : ");
     pw.close();
     String queueInfoStr = baos.toString("UTF-8");
@@ -1406,6 +1413,31 @@ public class TestYarnCLI {
     Assert.assertNotSame("should return non-zero exit code.", 0, exitCode);
   }
 
+  @Test(timeout = 60000)
+  public void testUpdateApplicationPriority() throws Exception {
+    ApplicationCLI cli = createAndGetAppCLI();
+    ApplicationId applicationId = ApplicationId.newInstance(1234, 6);
+
+    ApplicationReport appReport =
+        ApplicationReport.newInstance(applicationId,
+            ApplicationAttemptId.newInstance(applicationId, 1), "user",
+            "queue", "appname", "host", 124, null,
+            YarnApplicationState.RUNNING, "diagnostics", "url", 0, 0,
+            FinalApplicationStatus.UNDEFINED, null, "N/A", 0.53789f, "YARN",
+            null);
+    when(client.getApplicationReport(any(ApplicationId.class))).thenReturn(
+        appReport);
+
+    int result =
+        cli.run(new String[] { "application", "-appId",
+            applicationId.toString(),
+        "-updatePriority", "1" });
+    Assert.assertEquals(result, 0);
+    verify(client).updateApplicationPriority(any(ApplicationId.class),
+        any(Priority.class));
+
+  }
+
   private void verifyUsageInfo(YarnCLI cli) throws Exception {
     cli.setSysErrPrintStream(sysErr);
     cli.run(new String[] { "application" });
@@ -1455,6 +1487,7 @@ public class TestYarnCLI {
     ByteArrayOutputStream baos = new ByteArrayOutputStream();
     PrintWriter pw = new PrintWriter(baos);
     pw.println("usage: application");
+    pw.println(" -appId <Application ID>         Specify Application Id to be operated");
     pw.println(" -appStates <States>             Works with -list to filter applications");
     pw.println("                                 based on input comma-separated list of");
     pw.println("                                 application states. The valid application");
@@ -1477,6 +1510,9 @@ public class TestYarnCLI {
     pw.println("                                 specify which queue to move an");
     pw.println("                                 application to.");
     pw.println(" -status <Application ID>        Prints the status of the application.");
+    pw.println(" -updatePriority <Priority>      update priority of an application.");
+    pw.println("                                 ApplicationId can be passed using 'appId'");
+    pw.println("                                 option.");
     pw.close();
     String appsHelpStr = baos.toString("UTF-8");
     return appsHelpStr;

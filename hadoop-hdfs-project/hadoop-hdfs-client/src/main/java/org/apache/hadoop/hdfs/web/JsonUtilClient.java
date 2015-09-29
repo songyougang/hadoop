@@ -241,7 +241,8 @@ class JsonUtilClient {
         getLong(m, "lastUpdateMonotonic", 0l),
         getInt(m, "xceiverCount", 0),
         getString(m, "networkLocation", ""),
-        DatanodeInfo.AdminStates.valueOf(getString(m, "adminState", "NORMAL")));
+        DatanodeInfo.AdminStates.valueOf(getString(m, "adminState", "NORMAL")),
+        getString(m, "upgradeDomain", ""));
   }
 
   /** Convert an Object[] to a DatanodeInfo[]. */
@@ -389,6 +390,16 @@ class JsonUtilClient {
     return aclStatusBuilder.build();
   }
 
+  static String getPath(final Map<?, ?> json)
+      throws IOException {
+    if (json == null) {
+      return null;
+    }
+
+    String path = (String) json.get("Path");
+    return path;
+  }
+
   static byte[] getXAttr(final Map<?, ?> json, final String name)
       throws IOException {
     if (json == null) {
@@ -398,6 +409,20 @@ class JsonUtilClient {
     Map<String, byte[]> xAttrs = toXAttrs(json);
     if (xAttrs != null) {
       return xAttrs.get(name);
+    }
+
+    return null;
+  }
+
+  /** Expecting only single XAttr in the map. return its value */
+  static byte[] getXAttr(final Map<?, ?> json) throws IOException {
+    if (json == null) {
+      return null;
+    }
+
+    Map<String, byte[]> xAttrs = toXAttrs(json);
+    if (xAttrs != null && !xAttrs.values().isEmpty()) {
+      return xAttrs.values().iterator().next();
     }
 
     return null;

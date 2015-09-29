@@ -50,6 +50,7 @@ import org.apache.hadoop.fs.CacheFlag;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileSystemTestHelper;
+import org.apache.hadoop.fs.FsTracer;
 import org.apache.hadoop.fs.InvalidRequestException;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.RemoteIterator;
@@ -76,6 +77,7 @@ import org.apache.hadoop.hdfs.server.blockmanagement.DatanodeDescriptor;
 import org.apache.hadoop.hdfs.server.blockmanagement.DatanodeDescriptor.CachedBlocksList.Type;
 import org.apache.hadoop.hdfs.server.blockmanagement.DatanodeManager;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
+import org.apache.hadoop.hdfs.server.datanode.DataNodeTestUtils;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocols;
 import org.apache.hadoop.io.nativeio.NativeIO;
 import org.apache.hadoop.io.nativeio.NativeIO.POSIX.CacheManipulator;
@@ -87,7 +89,6 @@ import org.apache.hadoop.util.GSet;
 import org.apache.log4j.Level;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
-import org.apache.htrace.Sampler;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -966,7 +967,7 @@ public class TestCacheDirectives {
 
     // Uncache and check each path in sequence
     RemoteIterator<CacheDirectiveEntry> entries =
-      new CacheDirectiveIterator(nnRpc, null, Sampler.NEVER);
+      new CacheDirectiveIterator(nnRpc, null, FsTracer.get(conf));
     for (int i=0; i<numFiles; i++) {
       CacheDirectiveEntry entry = entries.next();
       nnRpc.removeCacheDirective(entry.getInfo().getId());
@@ -1509,5 +1510,29 @@ public class TestCacheDirectives {
     checkPendingCachedEmpty(cluster);
     Thread.sleep(1000);
     checkPendingCachedEmpty(cluster);
+  }
+
+  @Test(timeout=60000)
+  public void testNoBackingReplica() throws Exception {
+    // Cache all three replicas for a file.
+    final Path filename = new Path("/noback");
+    final short replication = (short) 3;
+    DFSTestUtil.createFile(dfs, filename, 1, replication, 0x0BAC);
+    dfs.addCachePool(new CachePoolInfo("pool"));
+    dfs.addCacheDirective(
+        new CacheDirectiveInfo.Builder().setPool("pool").setPath(filename)
+            .setReplication(replication).build());
+    waitForCachedBlocks(namenode, 1, replication, "testNoBackingReplica:1");
+    // Pause cache reports while we change the replication factor.
+    // This will orphan some cached replicas.
+    DataNodeTestUtils.setCacheReportsDisabledForTests(cluster, true);
+    try {
+      dfs.setReplication(filename, (short) 1);
+      DFSTestUtil.waitForReplication(dfs, filename, (short) 1, 30000);
+      // The cache locations should drop down to 1 even without cache reports.
+      waitForCachedBlocks(namenode, 1, (short) 1, "testNoBackingReplica:2");
+    } finally {
+      DataNodeTestUtils.setCacheReportsDisabledForTests(cluster, false);
+    }
   }
 }

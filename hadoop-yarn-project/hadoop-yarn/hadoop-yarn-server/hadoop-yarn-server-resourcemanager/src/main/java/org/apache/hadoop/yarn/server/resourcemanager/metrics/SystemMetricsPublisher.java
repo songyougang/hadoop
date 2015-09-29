@@ -31,6 +31,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.service.CompositeService;
 import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
+import org.apache.hadoop.yarn.api.records.ApplicationSubmissionContext;
 import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.api.records.timeline.TimelineEntity;
 import org.apache.hadoop.yarn.api.records.timeline.TimelineEvent;
@@ -45,6 +46,7 @@ import org.apache.hadoop.yarn.server.metrics.ApplicationMetricsConstants;
 import org.apache.hadoop.yarn.server.metrics.ContainerMetricsConstants;
 import org.apache.hadoop.yarn.server.resourcemanager.RMServerUtils;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMApp;
+import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMAppImpl;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMAppMetrics;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMAppState;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.attempt.RMAppAttempt;
@@ -98,6 +100,8 @@ public class SystemMetricsPublisher extends CompositeService {
   @SuppressWarnings("unchecked")
   public void appCreated(RMApp app, long createdTime) {
     if (publishSystemMetrics) {
+      ApplicationSubmissionContext appSubmissionContext =
+          app.getApplicationSubmissionContext();
       dispatcher.getEventHandler().handle(
           new ApplicationCreatedEvent(
               app.getApplicationId(),
@@ -106,7 +110,22 @@ public class SystemMetricsPublisher extends CompositeService {
               app.getUser(),
               app.getQueue(),
               app.getSubmitTime(),
-              createdTime, app.getApplicationTags()));
+              createdTime, app.getApplicationTags(),
+              appSubmissionContext.getUnmanagedAM(),
+              appSubmissionContext.getPriority(),
+              app.getAppNodeLabelExpression(),
+              app.getAmNodeLabelExpression()));
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  public void appUpdated(RMApp app, long updatedTime) {
+    if (publishSystemMetrics) {
+      dispatcher.getEventHandler()
+          .handle(
+              new ApplicationUpdatedEvent(app.getApplicationId(), app
+                  .getQueue(), updatedTime, app
+                  .getApplicationSubmissionContext().getPriority()));
     }
   }
 
@@ -220,6 +239,9 @@ public class SystemMetricsPublisher extends CompositeService {
       case APP_ACLS_UPDATED:
         publishApplicationACLsUpdatedEvent((ApplicationACLsUpdatedEvent) event);
         break;
+      case APP_UPDATED:
+        publishApplicationUpdatedEvent((ApplicationUpdatedEvent) event);
+        break;
       case APP_ATTEMPT_REGISTERED:
         publishAppAttemptRegisteredEvent((AppAttemptRegisteredEvent) event);
         break;
@@ -253,6 +275,15 @@ public class SystemMetricsPublisher extends CompositeService {
         event.getSubmittedTime());
     entityInfo.put(ApplicationMetricsConstants.APP_TAGS_INFO,
         event.getAppTags());
+    entityInfo.put(
+        ApplicationMetricsConstants.UNMANAGED_APPLICATION_ENTITY_INFO,
+        event.isUnmanagedApp());
+    entityInfo.put(ApplicationMetricsConstants.APPLICATION_PRIORITY_INFO,
+        event.getApplicationPriority().getPriority());
+    entityInfo.put(ApplicationMetricsConstants.APP_NODE_LABEL_EXPRESSION,
+        event.getAppNodeLabelsExpression());
+    entityInfo.put(ApplicationMetricsConstants.AM_NODE_LABEL_EXPRESSION,
+        event.getAmNodeLabelsExpression());
     entity.setOtherInfo(entityInfo);
     TimelineEvent tEvent = new TimelineEvent();
     tEvent.setEventType(
@@ -286,6 +317,21 @@ public class SystemMetricsPublisher extends CompositeService {
     entity.addOtherInfo(ApplicationMetricsConstants.APP_MEM_METRICS,
         appMetrics.getMemorySeconds());
     
+    tEvent.setEventInfo(eventInfo);
+    entity.addEvent(tEvent);
+    putEntity(entity);
+  }
+
+  private void publishApplicationUpdatedEvent(ApplicationUpdatedEvent event) {
+    TimelineEntity entity = createApplicationEntity(event.getApplicationId());
+    Map<String, Object> eventInfo = new HashMap<String, Object>();
+    eventInfo.put(ApplicationMetricsConstants.QUEUE_ENTITY_INFO,
+        event.getQueue());
+    eventInfo.put(ApplicationMetricsConstants.APPLICATION_PRIORITY_INFO, event
+        .getApplicationPriority().getPriority());
+    TimelineEvent tEvent = new TimelineEvent();
+    tEvent.setEventType(ApplicationMetricsConstants.UPDATED_EVENT_TYPE);
+    tEvent.setTimestamp(event.getTimestamp());
     tEvent.setEventInfo(eventInfo);
     entity.addEvent(tEvent);
     putEntity(entity);

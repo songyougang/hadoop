@@ -543,10 +543,23 @@ public class FSAppAttempt extends SchedulerApplicationAttempt
       return container.getResource();
     }
 
-    // The desired container won't fit here, so reserve
-    reserve(request.getPriority(), node, container, reserved);
+    if (isReservable(container)) {
+      // The desired container won't fit here, so reserve
+      reserve(request.getPriority(), node, container, reserved);
 
-    return FairScheduler.CONTAINER_RESERVED;
+      return FairScheduler.CONTAINER_RESERVED;
+    } else {
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Not creating reservation as container " + container.getId()
+            + " is not reservable");
+      }
+      return Resources.none();
+    }
+  }
+
+  private boolean isReservable(Container container) {
+    return scheduler.isAtLeastReservationThreshold(
+      getQueue().getPolicy().getResourceCalculator(), container.getResource());
   }
 
   private boolean hasNodeOrRackLocalRequests(Priority priority) {
@@ -801,8 +814,8 @@ public class FSAppAttempt extends SchedulerApplicationAttempt
     synchronized (this) {
       for (Priority p : getPriorities()) {
         for (ResourceRequest r : getResourceRequests(p).values()) {
-          Resource total = Resources.multiply(r.getCapability(), r.getNumContainers());
-          Resources.addTo(demand, total);
+          Resources.multiplyAndAddTo(demand,
+              r.getCapability(), r.getNumContainers());
         }
       }
     }

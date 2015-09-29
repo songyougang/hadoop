@@ -124,8 +124,8 @@ public class TestClientProtocolForPipelineRecovery {
   public void testPipelineRecoveryForLastBlock() throws IOException {
     DFSClientFaultInjector faultInjector
         = Mockito.mock(DFSClientFaultInjector.class);
-    DFSClientFaultInjector oldInjector = DFSClientFaultInjector.instance;
-    DFSClientFaultInjector.instance = faultInjector;
+    DFSClientFaultInjector oldInjector = DFSClientFaultInjector.get();
+    DFSClientFaultInjector.set(faultInjector);
     Configuration conf = new HdfsConfiguration();
 
     conf.setInt(HdfsClientConfigKeys.BlockWrite.LOCATEFOLLOWINGBLOCK_RETRIES_KEY, 3);
@@ -153,7 +153,7 @@ public class TestClientProtocolForPipelineRecovery {
             + " corrupt replicas.");
       }
     } finally {
-      DFSClientFaultInjector.instance = oldInjector;
+      DFSClientFaultInjector.set(oldInjector);
       if (cluster != null) {
         cluster.shutdown();
       }
@@ -169,7 +169,7 @@ public class TestClientProtocolForPipelineRecovery {
   @Test
   public void testPipelineRecoveryOnOOB() throws Exception {
     Configuration conf = new HdfsConfiguration();
-    conf.set(DFSConfigKeys.DFS_CLIENT_DATANODE_RESTART_TIMEOUT_KEY, "15");
+    conf.set(HdfsClientConfigKeys.DFS_CLIENT_DATANODE_RESTART_TIMEOUT_KEY, "15");
     MiniDFSCluster cluster = null;
     try {
       int numDataNodes = 1;
@@ -207,7 +207,7 @@ public class TestClientProtocolForPipelineRecovery {
   @Test
   public void testPipelineRecoveryOnRestartFailure() throws Exception {
     Configuration conf = new HdfsConfiguration();
-    conf.set(DFSConfigKeys.DFS_CLIENT_DATANODE_RESTART_TIMEOUT_KEY, "5");
+    conf.set(HdfsClientConfigKeys.DFS_CLIENT_DATANODE_RESTART_TIMEOUT_KEY, "5");
     MiniDFSCluster cluster = null;
     try {
       int numDataNodes = 2;

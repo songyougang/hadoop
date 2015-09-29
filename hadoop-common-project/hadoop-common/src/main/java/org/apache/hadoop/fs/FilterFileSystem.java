@@ -203,7 +203,6 @@ public class FilterFileSystem extends FileSystem {
 
 
   @Override
-  @Deprecated
   public FSDataOutputStream createNonRecursive(Path f, FsPermission permission,
       EnumSet<CreateFlag> flags, int bufferSize, short replication, long blockSize,
       Progressable progress) throws IOException {
@@ -625,6 +624,12 @@ public class FilterFileSystem extends FileSystem {
   public void setStoragePolicy(Path src, String policyName)
       throws IOException {
     fs.setStoragePolicy(src, policyName);
+  }
+
+  @Override
+  public BlockStoragePolicySpi getStoragePolicy(final Path src)
+      throws IOException {
+    return fs.getStoragePolicy(src);
   }
 
   @Override
